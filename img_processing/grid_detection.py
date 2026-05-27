@@ -29,7 +29,7 @@ def detect_grid_lines(binarizedImage): #returns 2 arrays that contain the coordi
             y_avg = (y1 + y2) // 2
             horizontal.append(y_avg)
 
-    return process_grids_array(vertical), process_grids_array(horizontal)
+    return process_grids_array(vertical), process_grids_array(horizontal) #processing because the hough transform can detect multiple lines for the same grid line, so we need to filter them out
 
 def process_grids_array(arr): #takes an array, sorts it, and then returns a new array where any subsequent elements that differ from the previous one by more than <LINE_THRESHOLD> are inserted.
     arr.sort()

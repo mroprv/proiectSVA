@@ -1,17 +1,23 @@
 import cv2
 import numpy as np
 
-def is_circle(binarizedImage) -> bool: #checks if the binarized image contains a circle
-    contours, _ = cv2.findContours(binarizedImage,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+def detect_circle(binary):
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return False
 
     c = max(contours, key=cv2.contourArea)
+
     area = cv2.contourArea(c)
+    if area < 50:
+        return False
 
-    _ , radius = cv2.minEnclosingCircle(c)
+    perimeter = cv2.arcLength(c, True)
+    if perimeter == 0:
+        return False
 
-    circle_area = np.pi * radius * radius
+    circularity = 4 * np.pi * area / (perimeter ** 2)
 
-    ratio = area / circle_area
-    if 0.35 < ratio < 0.9:
-        return True
-    return False
+    
+    return circularity > 0.25
