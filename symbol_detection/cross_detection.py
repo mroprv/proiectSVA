@@ -1,11 +1,8 @@
 import cv2
 import numpy as np
 
-def detect_x(image: np.ndarray, crop_fraction: float = 0.10) -> bool:
-    """
-    Returns True if the binarized tic-tac-toe cell contains an X.
-    Crops inward by crop_fraction on each side to ignore stray grid lines.
-    """
+
+def detect_x(image: np.ndarray) -> bool:
     # Normalize to single-channel, white foreground
     if image.ndim == 3:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -14,9 +11,12 @@ def detect_x(image: np.ndarray, crop_fraction: float = 0.10) -> bool:
         image = cv2.bitwise_not(image)
 
     # Crop margin to remove stray grid lines
-    h, w = image.shape
-    dy, dx = max(1, int(h * crop_fraction)), max(1, int(w * crop_fraction))
-    image = image[dy:h-dy, dx:w-dx]
+    h, w = image.shape[:2]
+    percent = 0.2
+    image = image[
+        int(percent * h) : int((1 - percent) * h),
+        int(percent * w) : int((1 - percent) * w),
+    ]
 
     # Detect line segments
     cell_size = min(image.shape)
@@ -36,10 +36,14 @@ def detect_x(image: np.ndarray, crop_fraction: float = 0.10) -> bool:
     has_pos, has_neg = False, False
     for x1, y1, x2, y2 in lines[:, 0]:
         angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-        if angle > 90:  angle -= 180
-        if angle <= -90: angle += 180
+        if angle > 90:
+            angle -= 180
+        if angle <= -90:
+            angle += 180
         if 20 <= abs(angle) <= 70:
-            if angle > 0: has_pos = True
-            else:         has_neg = True
+            if angle > 0:
+                has_pos = True
+            else:
+                has_neg = True
 
     return has_pos and has_neg

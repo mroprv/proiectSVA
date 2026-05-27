@@ -1,0 +1,2 @@
+change image name in config.py
+if photo is irl, change IS_PHOTO_REAL to 1, else, keep it to 0
