@@ -3,8 +3,7 @@ from img_processing.grid_detection import *
 from img_processing.preprocess import *
 from img_processing.separate_images import *
 from utils.visualization import (show,draw_lines)
-from symbol_detection.classify import classify_cell
-
+from game_logic.build_game_matrix import build_matrix
 def main():
     img = cv2.imread(IMAGE_PATH)
     #show("orig",img)
@@ -30,13 +29,16 @@ def main():
     #separate into 9 images
     imagini=separate_img(img,vertical,horizontal)
 
-    imgindex=5
-    show("img",imagini[imgindex])
+    # imgindex=5
+    # show("img",imagini[imgindex])
     
-    print(classify_cell(imagini[imgindex]))
+    # print(classify_cell(imagini[imgindex]))
 
+    board=build_matrix(imagini)
 
-
+    print("Game Matrix:")
+    for row in board:
+        print(row)
 
 
 
