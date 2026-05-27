@@ -1,0 +1,3 @@
+IMAGE_PATH = "testing_photos/ttt.png"
+BOARD_SIZE=500
+LINE_THRESHOLD=20
