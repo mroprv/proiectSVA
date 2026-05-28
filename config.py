@@ -33,7 +33,7 @@ O_CLOSING_ITERATIONS = 2
 # --- Detecție simbol străin --------------------------------------------------
 # Fracțiunea din marginea celulei care se elimină înainte de analiză, pentru a
 # exclude resturile de linii ale grilei care ar putea fi confundate cu conținut.
-FOREIGN_MARGIN = 0.20
+FOREIGN_MARGIN = 0.40
 
 # Procentul minim de pixeli de prim-plan (albi) din zona centrală a celulei
 # pentru ca aceasta să fie considerată ne-goală.
