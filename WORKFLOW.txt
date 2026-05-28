@@ -1,0 +1,266 @@
+================================================================================
+PROIECT: Detecție automată tablă Tic-Tac-Toe prin viziune artificială
+================================================================================
+
+DESCRIERE GENERALĂ
+------------------
+Sistemul analizează o imagine (fotografie sau cadru video) care conține o tablă
+de joc tic-tac-toe și produce o matrice 3×3 cu simbolurile detectate în fiecare
+celulă: X, O, ? (simbol necunoscut) sau spațiu (celulă goală).
+
+Există două moduri de rulare:
+  - main.py      : analiză pe o singură imagine statică
+  - realtime.py  : detecție continuă prin webcam, cadru cu cadru
+
+
+================================================================================
+PIPELINE DE PROCESARE (etapă cu etapă)
+================================================================================
+
+ETAPA 0 — CITIRE IMAGINE
+-------------------------
+Fișier: main.py / realtime.py
+Operație: cv2.imread (fișier) sau cap.read() (cameră)
+Rezultat: imagine color BGR, rezoluție variabilă
+
+Imaginea originală este redimensionată la BOARD_SIZE × BOARD_SIZE și afișată
+ca referință vizuală, dar procesarea se face pe copia la rezoluție originală.
+
+
+ETAPA 1 — PREPROCESARE (img_processing/preprocess.py)
+------------------------------------------------------
+Scop: transformarea imaginii color într-o imagine binară curată
+      (alb = prim-plan/cerneală, negru = fundal/hârtie)
+
+Pași în ordine:
+
+  1.1 Conversie BGR → Gri (cv2.cvtColor)
+      Reducem de la 3 canale la 1 canal; culoarea nu aduce informație utilă.
+
+  1.2 CLAHE — Contrast Limited Adaptive Histogram Equalization
+      (cv2.createCLAHE, clipLimit=2.0, tileGridSize=8×8)
+      Egalizare adaptivă a contrastului local: îmbunătățește vizibilitatea
+      simbolurilor în zone cu iluminare neuniformă, fără a amplifica zgomotul.
+
+  1.3 Estimarea fundalului prin blur Gaussian puternic
+      (cv2.GaussianBlur, kernel 55×55)
+      Un blur de raza mare estompează toate detaliile fine și lasă doar
+      variația lentă a luminozității — adică iluminarea neuniformă a fundației.
+
+  1.4 Normalizare prin împărțire pixel cu pixel
+      (cv2.divide, scale=255)
+      Fiecare pixel este împărțit la estimarea locală a fundalului.
+      Efectul: zonele mai întunecate sunt „ridicate" la același nivel ca cele
+      luminoase → imagine uniform contrastată indiferent de sursa de lumină.
+
+  1.5 Blur Gaussian mic (kernel 5×5)
+      Reduce zgomotul de înaltă frecvență înaintea pragului, prevenind
+      fragmentarea liniilor continue.
+
+  1.6 Prag binar Otsu + inversare (THRESH_BINARY_INV + THRESH_OTSU)
+      Otsu calculează automat valoarea optimă de prag pe baza histogramei.
+      BINARY_INV: liniile și simbolurile (mai închise) devin ALBE,
+      fundalul (mai deschis) devine NEGRU.
+
+  1.7 MORPH_CLOSE (dilatare + eroziune, kernel 3×3, 2 iterații)
+      Unește întreruperile mici din linii și contururi.
+      Dilatarea „umflă" structurile albe, unindu-le; eroziunea le readuce
+      la dimensiunea inițială, dar cu golurile mici acum închise.
+
+  1.8 MORPH_OPEN (eroziune + dilatare, kernel 3×3, 1-2 iterații)
+      Elimină punctele izolate de zgomot și obiectele mici.
+      Numărul de iterații este mai mare pentru fotografii reale (IS_PHOTO_REAL=1).
+
+  1.9 Eliminare pixeli izolați (doar IS_PHOTO_REAL=1)
+      Un filtru de convoluție numără vecinii fiecărui pixel alb.
+      Pixelii fără niciun vecin alb sunt resetați la negru.
+
+
+ETAPA 1b — LOCALIZARE ȘI ALINIERE GRILĂ (img_processing/grid_localization.py)
+-------------------------------------------------------------------------------
+Scop: identificarea zonei grilei în imaginea preprocesată, corectarea
+      înclinării și decuparea strânsă în jurul grilei.
+
+Pași:
+
+  1b.1 Detecție linii Hough probabilistică (HoughLinesP)
+       Parametri adaptivi: lungimea minimă = 15% din latura minimă a imaginii.
+       threshold=40, maxLineGap=20 — configurație mai permisivă decât în
+       Etapa 2, pentru a detecta și linii parțiale.
+
+  1b.2 Calculul unghiului de înclinare (skew)
+       Fiecare segment detectat este clasificat ca „aproape orizontal" (<45°)
+       sau „aproape vertical" (45°-135°).
+       Unghiurile sunt normalizate la [0°,180°) pentru a elimina ambiguitatea
+       direcției (un segment A→B și B→A reprezintă aceeași linie).
+       Formula de deviere:
+         - orizontale: deviație = unghi (față de 0°)
+         - verticale:  deviație = 90° − unghi (față de 90°)
+       Ambele formule dau același semn pentru aceeași rotire fizică.
+       Estimarea finală: mediană ponderată cu lungimea segmentului.
+       Segmentele lungi (linii reale de grilă) au prioritate față de cele
+       scurte (margini de simboluri, zgomot).
+
+  1b.3 Corectare rotație (cv2.warpAffine)
+       Dacă skew > 0,5°, se aplică o rotire cu -skew grade.
+       Unghiul negativ în getRotationMatrix2D = rotire trigonometrică (CCW),
+       corectând o înclinare orară (CW) a imaginii.
+
+  1b.4 Re-detecție Hough pe imaginea corectată
+       Necesară pentru a obține coordonate precise ale liniilor după rotație.
+
+  1b.5 Identificarea liniilor interioare ale grilei
+       Din toate clusterele detectate, se aleg cele 2 mai apropiate de centrul
+       imaginii pe fiecare axă — acestea sunt liniile interioare ale grilei
+       (nu marginile exterioare ale hârtiei).
+
+  1b.6 Crop centrat pe celula de mijloc
+       cell_w = distanța dintre cele 2 linii verticale interioare
+       cell_h = distanța dintre cele 2 linii orizontale interioare
+       Crop = GRID_CROP_FACTOR × dimensiunea celulei, centrat pe mijlocul
+       celulei centrale (implicit factor 4 → grilă completă + bordură mică).
+
+  1b.7 Fallback: dacă liniile interioare nu pot fi izolate, se folosește
+       bounding-box-ul tuturor liniilor axiale + GRID_LOCALIZE_PADDING.
+
+
+ETAPA 2 — DETECȚIE LINII GRILĂ (img_processing/grid_detection.py)
+------------------------------------------------------------------
+Scop: găsirea coordonatelor precise ale celor 2 linii verticale și 2 orizontale
+      pe imaginea deja localizată și redimensionată la BOARD_SIZE × BOARD_SIZE.
+
+  2.1 HoughLinesP cu parametri stricți (threshold=100, minLineLength=100)
+      Pe imaginea uniformizată, liniile grilei sunt clare și lungi;
+      pragul ridicat elimină detecțiile false.
+
+  2.2 Clasificare linii: |unghi| > 70° = verticală, |unghi| < 20° = orizontală
+
+  2.3 process_grids_array: sortare + deduplicare
+      Hough poate returna mai multe segmente pentru aceeași linie fizică.
+      Funcția păstrează o singură valoare per grup de coordonate apropiate
+      (distanță < LINE_THRESHOLD).
+
+
+ETAPA 3 — SEPARAREA ÎN CELULE (img_processing/separate_images.py)
+------------------------------------------------------------------
+Scop: decuparea celor 9 celule individuale ale tablei.
+
+Folosind coordonatele celor 2 linii verticale (v0, v1) și 2 orizontale (h0, h1),
+imaginea este împărțită în 9 sub-imagini prin indexare numpy:
+
+  [0:h0,   0:v0]    [0:h0,   v0:v1]   [0:h0,   v1:W]
+  [h0:h1,  0:v0]    [h0:h1,  v0:v1]   [h0:h1,  v1:W]
+  [h1:H,   0:v0]    [h1:H,   v0:v1]   [h1:H,   v1:W]
+
+
+ETAPA 4 — CLASIFICAREA SIMBOLURILOR (symbol_detection/)
+-------------------------------------------------------
+Scop: determinarea conținutului fiecărei celule din cele 9.
+Fișier de orchestrare: classify.py → apelează detectoarele în ordine.
+
+  4.1 Detecție O — circle_detection.py
+      4.1.1 Closing morfologic cu kernel ELLIPSE (O_CLOSING_KERNEL_SIZE × O_CLOSING_KERNEL_SIZE)
+            Closing = Dilatare + Eroziune:
+            - Dilatarea extinde zone albe, unind segmentele unui cerc incomplet.
+            - Eroziunea readuce forma la dimensiunea inițială, dar cu golurile închise.
+            Kernel eliptic (nu pătrat): se potrivește mai bine cu forma circulară.
+      4.1.2 findContours (RETR_EXTERNAL) → conturul dominant (aria maximă)
+      4.1.3 Calcul circularitate: C = (4π × Arie) / Perimetru²
+            C=1.0 pentru cerc perfect, C→0 pentru forme neregulate.
+      4.1.4 Decizie: C > 0.25 → celula conține O
+
+  4.2 Detecție X — cross_detection.py
+      4.2.1 Normalizare binar + decupare margine 20% (exclude linii de grilă)
+      4.2.2 HoughLinesP pe zona centrală a celulei
+      4.2.3 Clasificarea segmentelor după unghi:
+            - Diagonale pozitive (+20° la +70°): pantă ╱
+            - Diagonale negative (-20° la -70°): pantă ╲
+      4.2.4 Decizie: ambele familii prezente simultan → celula conține X
+
+  4.3 Detecție simbol străin — foreign_symbol_detection.py
+      Apelat doar dacă celula nu este nici O, nici X.
+      4.3.1 Normalizare binar + decupare margine FOREIGN_MARGIN (20%)
+      4.3.2 Calcul densitate prim-plan: pixeli albi / total pixeli
+            Dacă densitate < FOREIGN_MIN_DENSITY (2%) → celulă goală → False
+      4.3.3 findContours: dacă există cel puțin un contur cu arie ≥ 10px² → "?"
+
+  4.4 Fallback: dacă niciun detector nu returnează True → celulă goală " "
+
+
+ETAPA 5 — CONSTRUIRE MATRICE DE JOC (game_logic/build_game_matrix.py)
+----------------------------------------------------------------------
+Iterează cele 9 celule și construiește matricea 3×3:
+  index i → rândul i//3, coloana i%3
+Fiecare element al matricei este rezultatul classify_cell(celulă).
+
+
+================================================================================
+MODUL REALTIME (realtime.py)
+================================================================================
+
+Rularea în timp real repetă pipeline-ul etapelor 1-5 pentru fiecare cadru video.
+
+Specificități față de main.py:
+
+  - Backend cameră: cv2.CAP_DSHOW (DirectShow, Windows) în loc de MSMF implicit,
+    eliminând întârzierea de inițializare de 30-60 secunde.
+
+  - Drain cadre inițiale: primele 5 cadre sunt consumate fără procesare,
+    deoarece camera livrează cadre întunecate/corupte la pornire.
+
+  - Gestionare erori per-cadru: excepțiile (grilă nedetectată, imagine goală)
+    sunt capturate și afișate ca mesaj de status; se păstrează ultimul rezultat
+    valid până la un cadru bun.
+
+  - Control FPS: cv2.waitKey(1000/REALTIME_FPS) limitează rata de procesare
+    la valoarea configurată în config.py.
+
+  - Afișaj side-by-side:
+      Panoul stâng  — cadrul original al camerei
+      Panoul drept  — imaginea binară cu linii grilă și simboluri suprapuse
+      Bara de sus   — FPS curent și status detecție
+      Colț jos-dreapta — matricea de joc ca text ASCII
+
+
+================================================================================
+STRUCTURA FIȘIERELOR
+================================================================================
+
+proiectSVA/
+├── config.py                          → parametri globali (ajustabili)
+├── main.py                            → punct de intrare pentru imagini statice
+├── realtime.py                        → modul detecție în timp real
+│
+├── img_processing/
+│   ├── preprocess.py                  → CLAHE, normalizare, Otsu, morfologie
+│   ├── grid_localization.py           → deskew + crop centrat pe grilă
+│   ├── grid_detection.py              → HoughLinesP + filtrare linii grilă
+│   └── separate_images.py             → decupare 9 celule
+│
+├── symbol_detection/
+│   ├── classify.py                    → orchestrare clasificare per celulă
+│   ├── circle_detection.py            → detecție O prin circularitate
+│   ├── cross_detection.py             → detecție X prin diagonale Hough
+│   └── foreign_symbol_detection.py    → detecție simboluri necunoscute
+│
+├── game_logic/
+│   └── build_game_matrix.py           → construire matrice 3×3
+│
+└── utils/
+    └── visualization.py               → afișare imagini intermediare și finale
+
+
+================================================================================
+TEHNOLOGII ȘI CONCEPTE CHEIE
+================================================================================
+
+  OpenCV (cv2)       — biblioteca principală de viziune artificială
+  NumPy              — operații matriciale pe imagini
+  CLAHE              — egalizare adaptivă a histogramei (contrast local)
+  Otsu Thresholding  — prag binar automat bazat pe histogramă bimodală
+  Morfologie matematică — CLOSE (unire întreruperi), OPEN (eliminare zgomot)
+  Transformata Hough — detecție linii și segmente în imagini binare
+  Circularitate      — descriptor de formă: C = 4πA/P² (1 = cerc perfect)
+  Mediană ponderată  — estimator robust al unghiului de înclinare
+  warpAffine         — rotire și transformare afină a imaginii
+================================================================================

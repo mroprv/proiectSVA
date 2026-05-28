@@ -1,3 +1,10 @@
+# =============================================================================
+# grid_detection.py — detecția liniilor grilei tic-tac-toe
+#
+# Primește imaginea binară preprocesată și returnează coordonatele celor
+# 2 linii verticale și 2 linii orizontale care formează grila.
+# =============================================================================
+
 from config import *
 
 import cv2
@@ -5,9 +12,27 @@ import numpy as np
 import math
 
 
-def detect_grid_lines(
-    binarizedImage,
-):  # returns 2 arrays that contain the coordinates where the playing grid intersects [x1 x2] [y1 y2]
+def detect_grid_lines(binarizedImage):
+    """
+    Detectează liniile grilei folosind Transformata Hough Probabilistică.
+
+    Transformata Hough caută segmente de dreaptă în imaginea binară votând
+    în spațiul parametric (rho, theta). Varianta probabilistică (HoughLinesP)
+    returnează direct segmente definite prin coordonatele capetelor (x1,y1,x2,y2),
+    nu drepte infinite, ceea ce o face mai eficientă și mai precisă.
+
+    Parametri HoughLinesP:
+      rho=1          — rezoluția distanței în pixeli
+      theta=π/180    — rezoluția unghiului în radiani (1 grad)
+      threshold=100  — numărul minim de voturi pentru a accepta o linie
+      minLineLength=100 — lungimea minimă a unui segment detectat
+      maxLineGap=25  — distanța maximă între două segmente colineare pentru
+                       a fi unite în același segment
+
+    Clasificare linii:
+      |unghi| > 70°  → linie verticală  (x-ul mediu este coordonata grilei)
+      |unghi| < 20°  → linie orizontală (y-ul mediu este coordonata grilei)
+    """
 
     lines = cv2.HoughLinesP(
         binarizedImage,
@@ -27,26 +52,36 @@ def detect_grid_lines(
     for line in lines:
         x1, y1, x2, y2 = line[0]
 
+        # Calculăm unghiul față de axa orizontală folosind arctan2
         angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
 
-        # vertical
+        # Linie aproape verticală: coordonata relevantă este X
         if abs(angle) > 70:
             x_avg = (x1 + x2) // 2
             vertical.append(x_avg)
 
-        # horizontal
+        # Linie aproape orizontală: coordonata relevantă este Y
         elif abs(angle) < 20:
             y_avg = (y1 + y2) // 2
             horizontal.append(y_avg)
 
-    return process_grids_array(vertical), process_grids_array(
-        horizontal
-    )  # processing because the hough transform can detect multiple lines for the same grid line, so we need to filter them out
+    # Hough poate detecta mai multe segmente pentru aceeași linie fizică;
+    # process_grids_array le grupează și returnează o singură valoare per linie.
+    return process_grids_array(vertical), process_grids_array(horizontal)
 
 
-def process_grids_array(
-    arr,
-):  # takes an array, sorts it, and then returns a new array where any subsequent elements that differ from the previous one by more than <LINE_THRESHOLD> are inserted.
+def process_grids_array(arr):
+    """
+    Filtrează un șir de coordonate detectate, eliminând duplicatele apropiate.
+
+    Sortează valorile și parcurge șirul; două valori consecutive sunt
+    considerate aceeași linie dacă diferența lor este mai mică decât
+    LINE_THRESHOLD (definit în config.py). Se păstrează prima valoare din
+    fiecare grup.
+
+    Exemplu: [245, 248, 251, 495, 498] cu LINE_THRESHOLD=20
+             → [245, 495]  (două linii distincte)
+    """
     arr.sort()
     arr = [int(x) for x in arr]
     newarr = [arr[0]]
@@ -54,5 +89,4 @@ def process_grids_array(
         if arr[i] - arr[i - 1] > LINE_THRESHOLD:
             newarr.append(arr[i])
 
-    # print(newarr,"/n")
     return newarr
